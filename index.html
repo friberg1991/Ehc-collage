@@ -57,6 +57,7 @@ h4:first-child{margin-top:2px}
 .pic:hover button{opacity:1}
 .tlist div{padding:8px 10px;border:1px solid var(--line);border-radius:7px;margin:4px 0;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tlist div.on{border-color:var(--acc);color:var(--acc)}
+.tlist input{width:100%;border:0;padding:0;margin:0;background:none;color:var(--text);font:inherit;outline:none;user-select:text}
 .stage{flex:1;display:block;min-width:0;position:relative;overflow:auto;background:#0d0e12}
 .stagewrap{min-width:100%;min-height:100%;width:max-content;height:max-content;display:flex;align-items:center;justify-content:center;padding:28px;box-sizing:border-box}
 .stage.pan,.stage.pan canvas{cursor:grab}
@@ -1032,7 +1033,8 @@ function tapTab(name) {
 }
 function editTextNow() {
   showTab('text'); $('.side').classList.remove('closed');
-  const ta = $('#textArea'); ta.focus(); ta.select();
+  const inp = $('#textList .tin') || $('#textArea');
+  inp.focus(); inp.select();
 }
 
 function showTab(name) {
@@ -1089,7 +1091,12 @@ function syncUI() {
     const m = imgs.get(id);
     return m ? `<div class="pic${picSel.has(id) ? ' on' : ''}" data-id="${id}" title="${esc(m.name)}"><img src="${m.thumb}" alt=""><button data-rm title="Ta bort">×</button></div>` : '';
   }).join('');
-  $('#textList').innerHTML = S.texts.map(x => `<div data-id="${x.id}" class="${t && t.id === x.id ? 'on' : ''}">${esc(x.text.split('\n')[0] || '(empty)')}</div>`).join('');
+  // While you type in the picked text's row it is left alone, so the typing is not interrupted.
+  const act = document.activeElement;
+  if (!(t && act && act.classList.contains('tin') && act.dataset.id === t.id))
+    $('#textList').innerHTML = S.texts.map(x => t && t.id === x.id
+      ? `<div data-id="${x.id}" class="on"><input class="tin" type="text" data-t="text" data-id="${x.id}" value="${esc(x.text)}" aria-label="Texten"></div>`
+      : `<div data-id="${x.id}">${esc(x.text.split('\n')[0] || '(tom)')}</div>`).join('');
   $('#status').textContent = `${S.order.length} ${S.order.length === 1 ? 'bild' : 'bilder'}`;
 }
 
@@ -1726,13 +1733,36 @@ $('#picList').addEventListener('click', e => {
 });
 $('#textList').addEventListener('click', e => {
   const d = e.target.closest('[data-id]'); if (!d) return;
+  const again = selText() && selText().id === d.dataset.id;
   select({ type: 'text', id: d.dataset.id });
+  if (!again) { const inp = $('#textList .tin'); if (inp) { inp.focus(); inp.select(); } }
+});
+// Clicking a text in the collage with the mouse (without dragging it) puts you straight into typing.
+let downAt = null;
+cv.addEventListener('pointerdown', e => { downAt = { x: e.clientX, y: e.clientY }; });
+cv.addEventListener('click', e => {
+  if (e.pointerType === 'touch' || !downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 4) return;
+  if (selText() && hitText(pt(e))) editTextNow();
 });
 $('#pickList').addEventListener('click', e => {
   const d = e.target.closest('.pic'); if (!d) return;
   $('#picker').hidden = true; pickPicture(d.dataset.id);
 });
 $('#picker').addEventListener('click', e => { if (e.target.id === 'picker') $('#picker').hidden = true; });
+// Enter while typing a name: on to the same box on the next picture.
+document.addEventListener('keydown', e => {
+  if (!e.target.classList.contains('tin')) return;
+  if (e.key === 'Escape') return e.target.blur();
+  if (e.key !== 'Enter') return;
+  e.preventDefault(); commit();
+  const t = selText();
+  if (!t || !t.pin) return e.target.blur();
+  const after = S.order.slice(S.order.indexOf(t.pin.id) + 1);
+  const next = after.map(id => S.texts.find(x => x.group === t.group && x.pin && x.pin.id === id)).find(Boolean);
+  if (!next) return e.target.blur();
+  select({ type: 'text', id: next.id });
+  const inp = $('#textList .tin'); inp.focus(); inp.select();
+});
 $('#textArea').addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.shiftKey) return;
   e.preventDefault(); commit();
