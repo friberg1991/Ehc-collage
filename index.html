@@ -126,7 +126,7 @@ details ul{padding-left:18px;margin:4px 0}
     <div data-show="grid mosaic center zig hive">
       <h4>Zooma flera bilder</h4>
       <div class="row"><button data-act="zoomAllOut">− Zooma ut</button><button data-act="zoomAllIn">+ Zooma in</button><button data-act="zoomAllReset">Återställ</button></div>
-      <p class="hint">Gäller <span id="zoomWho">alla bilder</span>. Vill du bara ändra några: tryck på Välj flera bilder och tryck på dem ovan.</p>
+      <p class="hint">Gäller <span id="zoomWho">alla bilder</span>. Vill du bara ändra några: tryck på Välj flera bilder och tryck på dem, här eller i collaget. Sedan flyttar du dem alla genom att dra i en av dem.</p>
     </div>
     <button class="wide" data-act="sortPics">Sortera i bokstavsordning</button>
     <button class="wide" data-act="clearPics">Ta bort alla bilder</button>
@@ -266,6 +266,7 @@ details ul{padding-left:18px;margin:4px 0}
     <button data-act="zoomIn">Zooma in</button><button data-act="zoomOut">Zooma ut</button><button data-act="resetCrop">Återställ</button>
     <span data-show="mosaic center"><button data-act="splitV">Dela på bredden</button><button data-act="splitH">Dela på höjden</button></span>
     <button data-act="makeHero" data-show="center">Gör till mittbild</button>
+    <button data-act="dupPic">Kopiera bilden</button>
     <button class="danger" data-act="removeSel">Ta bort</button>
   </span>
   <span data-when="pile">
@@ -275,6 +276,7 @@ details ul{padding-left:18px;margin:4px 0}
     <button data-act="up">Flytta upp</button><button data-act="down">Flytta ner</button>
     <button data-act="crop" id="bCrop">Beskär</button><button data-act="resetPileCrop" id="bUncrop">Ångra beskärningen</button>
     <select id="shapeSel" data-show="apile" title="Form"></select>
+    <button data-act="dupPic">Kopiera bilden</button>
     <button class="danger" data-act="removeSel">Ta bort</button>
   </span>
   <span data-show="pile apile">
@@ -931,6 +933,8 @@ function paint() {
   ctx.strokeStyle = '#5b5bd6'; ctx.lineWidth = 2.5 * px;
   const ss = selSlot();
   if (ss) { shapePath(ctx, ss); ctx.stroke(); }
+  // Every picked picture gets the same outline, so it shows which ones move and zoom together.
+  if (picSel.size > 1) for (const q of lastSlots) if (!q.pile && picSel.has(q.id)) { shapePath(ctx, q); ctx.stroke(); }
   if (drag && drag.target) { shapePath(ctx, drag.target); ctx.fillStyle = 'rgba(91,91,214,.35)'; ctx.fill(); ctx.stroke(); }
   const f = selFrame();
   if (f) {
@@ -1071,7 +1075,7 @@ function select(s) {
   sel = s;
   if (!s || s.type !== 'pile' || s.id !== cropId) cropId = null;
   const id = s && (s.type === 'pile' ? s.id : s.type === 'slot' ? S.order[s.i] : null);
-  if (id) { picSel = new Set([id]); picAnchor = id; }
+  if (id && !(picSel.size > 1 && picSel.has(id))) { picSel = new Set([id]); picAnchor = id; }
   syncUI(); draw();
 }
 
@@ -1518,7 +1522,26 @@ const A = {
   zoomIn: () => zoomSel(1.15), zoomOut: () => zoomSel(1 / 1.15),
   resetCrop() { const id = selId(); if (picSel.size > 1 && picSel.has(id)) return zoomMany(0); if (id) { delete S.crop[id]; commit(); } },
   pickMode() { pickMany = !pickMany; syncUI(); },
-  clearPicked() { picSel.clear(); pickMany = false; syncUI(); },
+  clearPicked() { picSel.clear(); pickMany = false; syncUI(); draw(); },
+  dupPic() {
+    const ids = picSel.size > 1 ? [...picSel] : [selId()].filter(Boolean);
+    if (!ids.length) return toast('Markera en bild först');
+    const fresh = [];
+    for (const id of ids) {
+      const m = imgs.get(id);
+      if (!m) continue;
+      const nid = newId();
+      imgs.set(nid, { ...m });
+      S.order.splice(S.order.indexOf(id) + 1, 0, nid);
+      if (S.crop[id]) S.crop[nid] = { ...S.crop[id] };
+      if (S.pile[id]) S.pile[nid] = { ...S.pile[id], x: clamp(S.pile[id].x + 0.04, 0, 1), y: clamp(S.pile[id].y + 0.04, 0, 1) };
+      // The copy gets the same texts, so a name follows the picture.
+      for (const t of S.texts.filter(x => x.pin && x.pin.id === id)) S.texts.push({ ...JSON.parse(JSON.stringify(t)), id: newId(), pin: { ...t.pin, id: nid } });
+      fresh.push(nid);
+    }
+    addTplTexts(S, fresh); S.cells = {}; commit();
+    toast(fresh.length === 1 ? 'Bilden är kopierad' : `${fresh.length} bilder är kopierade`);
+  },
   zoomAllIn: () => zoomMany(1.15), zoomAllOut: () => zoomMany(1 / 1.15), zoomAllReset: () => zoomMany(0),
   splitV: () => splitCell(true), splitH: () => splitCell(false),
   makeHero() {
@@ -1668,7 +1691,7 @@ $('#picList').addEventListener('click', e => {
   const p = e.target.closest('.pic'); if (!p) return;
   const id = p.dataset.id;
   if (e.target.closest('[data-rm]')) return removePics([id]);
-  if (e.ctrlKey || pickMany) { picSel.has(id) ? picSel.delete(id) : picSel.add(id); picAnchor = id; syncUI(); return; }
+  if (e.ctrlKey || pickMany) { picSel.has(id) ? picSel.delete(id) : picSel.add(id); picAnchor = id; syncUI(); draw(); return; }
   if (e.shiftKey && picAnchor && S.order.includes(picAnchor)) {
     const a = S.order.indexOf(picAnchor), b = S.order.indexOf(id);
     picSel = new Set(S.order.slice(Math.min(a, b), Math.max(a, b) + 1)); syncUI(); return;
@@ -1872,8 +1895,12 @@ cv.addEventListener('pointerdown', e => {
   const s = hitSlot(p);
   if (s && s.pile) { const q = S.pile[s.id]; drag = { mode: 'move', obj: q, p0: p, x0: q.x, y0: q.y }; select({ type: 'pile', id: s.id }); }
   else if (s) {
+    if (pickMany && s.id) { picSel.has(s.id) ? picSel.delete(s.id) : picSel.add(s.id); syncUI(); draw(); return; }
     const m = imgs.get(s.id);
-    drag = { mode: 'cell', s, p0: p, c0: m ? { ...effCrop(m, s.w, s.h, S.crop[s.id]) } : null, cropBefore: S.crop[s.id], target: null };
+    const many = picSel.size > 1 && picSel.has(s.id) && !S.lockPics
+      ? [...picSel].filter(id => id !== s.id && imgs.has(id)).map(id => { const q = slotOf(id) || s; return { id, s: q, c0: { ...effCrop(imgs.get(id), q.w, q.h, S.crop[id]) } }; })
+      : null;
+    drag = { mode: 'cell', s, p0: p, c0: m ? { ...effCrop(m, s.w, s.h, S.crop[s.id]) } : null, cropBefore: S.crop[s.id], target: null, many };
     select({ type: 'slot', i: s.i, ri: s.ri });
   } else select(null);
 });
@@ -1941,7 +1968,7 @@ cv.addEventListener('pointermove', e => {
     const shx = horiz ? sh : 0, shy = horiz ? 0 : sh;
     S.pile[id] = { ...p0, crop: c, w: horiz ? (s.w - d) / S.w : p0.w, x: p0.x + (shx * co - shy * si) / S.w, y: p0.y + (shx * si + shy * co) / S.h };
   } else if (drag.c0) {
-    const { s, c0 } = drag, over = hitSlot(p);
+    const { s, c0 } = drag, over = drag.many ? null : hitSlot(p);
     if (over && over !== s && over.i !== s.i) { drag.target = over; restoreCrop(); cv.style.cursor = 'grabbing'; }
     else if (!over || over.i === s.i) {
       drag.target = null;
@@ -1950,6 +1977,14 @@ cv.addEventListener('pointermove', e => {
       if (ovx > 0.5) c.x = clamp(c0.x + (p.x - drag.p0.x) / ovx, -1, 1);
       if (ovy > 0.5) c.y = clamp(c0.y + (p.y - drag.p0.y) / ovy, -1, 1);
       if (c.x !== c0.x || c.y !== c0.y) S.crop[s.id] = c;
+      // The other picked pictures move the same distance in their own boxes.
+      for (const g of drag.many || []) {
+        const gm = imgs.get(g.id), gs = Math.max(g.s.w / gm.w, g.s.h / gm.h) * g.c0.z, gc = { ...g.c0 };
+        const gx = (gm.w * gs - g.s.w) / 2, gy = (gm.h * gs - g.s.h) / 2;
+        if (gx > 0.5) gc.x = clamp(g.c0.x + (p.x - drag.p0.x) / gx, -1, 1);
+        if (gy > 0.5) gc.y = clamp(g.c0.y + (p.y - drag.p0.y) / gy, -1, 1);
+        S.crop[g.id] = gc;
+      }
     }
   }
   if (sel && sel.type === 'text') syncUI();
