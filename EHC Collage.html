@@ -122,6 +122,11 @@ details ul{padding-left:18px;margin:4px 0}
     <p class="hint">…eller dra in dem i fönstret, eller klistra in med Ctrl+V. Håll ner Ctrl eller Shift när du klickar om du vill välja flera.</p>
     <div id="picList" class="pics"></div>
     <button class="wide" data-act="removePicked" id="bRemovePicked">− Ta bort valda bilder</button>
+    <div data-show="grid mosaic center zig hive">
+      <h4>Zooma flera bilder</h4>
+      <div class="row"><button data-act="zoomAllOut">− Zooma ut</button><button data-act="zoomAllIn">+ Zooma in</button><button data-act="zoomAllReset">Återställ</button></div>
+      <p class="hint">Gäller <span id="zoomWho">alla bilder</span>. Vill du bara ändra några: håll ner Ctrl och klicka på dem ovan.</p>
+    </div>
     <button class="wide" data-act="sortPics">Sortera i bokstavsordning</button>
     <button class="wide" data-act="clearPics">Ta bort alla bilder</button>
     <details class="hint"><summary>Tips för musen</summary><ul>
@@ -1035,6 +1040,7 @@ function syncUI() {
   $('#pageNo').textContent = `Sida ${S.page + 1} av ${pages}`;
   $('#bUndo').disabled = hi <= 0; $('#bRedo').disabled = hi >= hist.length - 1;
   $('#bRemovePicked').hidden = !picSel.size;
+  $('#zoomWho').textContent = picSel.size > 1 ? `de ${picSel.size} bilderna du har valt` : 'alla bilder';
   const sp = sel && sel.type === 'pile' && S.pile[sel.id];
   if (sp) {
     $('#bCrop').hidden = S.style === 'apile' && sp.shape !== 'rect';
@@ -1308,7 +1314,21 @@ function removePics(ids) {
   S.texts = S.texts.filter(t => !(t.pin && gone.has(t.pin.id)));
   sel = null; cropId = null; picSel.clear(); commit();
 }
+// Zooms several pictures in their boxes at once: the picked ones when two or more are picked, otherwise all.
+// f = 0 puts them back to how they started.
+function zoomMany(f) {
+  const ids = picSel.size > 1 ? [...picSel] : S.order.slice(), ref = lastSlots.find(q => !q.pile && q.id);
+  for (const id of ids) {
+    if (!f) { delete S.crop[id]; continue; }
+    const m = imgs.get(id), s = slotOf(id) || ref;
+    if (!m || !s) continue;
+    const c = { ...effCrop(m, s.w, s.h, S.crop[id]) };
+    c.z = clamp(c.z * f, 1, 8); S.crop[id] = c;
+  }
+  commit();
+}
 function zoomSel(f) {
+  if (picSel.size > 1 && picSel.has(selId())) return zoomMany(f);
   const s = selSlot(), m = s && imgs.get(s.id);
   if (!m) return;
   const c = { ...effCrop(m, s.w, s.h, S.crop[s.id]) };
@@ -1490,7 +1510,8 @@ const A = {
   },
   closePicker: () => { $('#picker').hidden = true; },
   zoomIn: () => zoomSel(1.15), zoomOut: () => zoomSel(1 / 1.15),
-  resetCrop() { const id = selId(); if (id) { delete S.crop[id]; commit(); } },
+  resetCrop() { const id = selId(); if (picSel.size > 1 && picSel.has(id)) return zoomMany(0); if (id) { delete S.crop[id]; commit(); } },
+  zoomAllIn: () => zoomMany(1.15), zoomAllOut: () => zoomMany(1 / 1.15), zoomAllReset: () => zoomMany(0),
   splitV: () => splitCell(true), splitH: () => splitCell(false),
   makeHero() {
     if (sel && sel.type === 'slot' && sel.i > 0) {
