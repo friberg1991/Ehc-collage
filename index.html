@@ -124,6 +124,7 @@ details ul{padding-left:18px;margin:4px 0}
     <div class="row"><button data-act="pickMode" id="bPickMode">Välj flera bilder</button><button data-act="clearPicked" id="bClearPicked">Avmarkera alla</button></div>
     <button class="wide" data-act="removePicked" id="bRemovePicked">− Ta bort valda bilder</button>
     <div data-show="grid mosaic center zig hive">
+      <label class="chk"><input type="checkbox" data-k="linkSame"> Kopior av samma bild zoomas och flyttas likadant</label>
       <h4>Zooma flera bilder</h4>
       <div class="row"><button data-act="zoomAllOut">− Zooma ut</button><button data-act="zoomAllIn">+ Zooma in</button><button data-act="zoomAllReset">Återställ</button></div>
       <p class="hint">Gäller <span id="zoomWho">alla bilder</span>. Vill du bara ändra några: tryck på Välj flera bilder och tryck på dem, här eller i collaget. Sedan flyttar du dem alla genom att dra i en av dem.</p>
@@ -345,7 +346,7 @@ function defaultState() {
     bg: { type: 'color', color: '#ffffff', img: null, tile: false, tiles: 5 },
     spacing: 12, corners: 0, border: 0, borderColor: '#ffffff', frame: 'instant',
     grid: { auto: true, rows: 2, cols: 3, fit: false, dupes: false },
-    symmetric: false, smartCrop: true, linkCopies: false, autoTexts: [],
+    symmetric: false, smartCrop: true, linkCopies: false, linkSame: true, autoTexts: [],
     seed: 1, perPage: 0, page: 0, order: [], crop: {}, pile: {}, cells: {}, texts: [],
     lockPics: false, lockText: false, exportFmt: 'jpeg', exportQ: 92, allPages: true
   };
@@ -912,6 +913,7 @@ function setZoom(z, clientX, clientY) {
 
 function paint() {
   raf = 0;
+  syncTwins();
   const st = $('#stage'), pad = isPhone() ? 10 : 28;
   const fit = Math.min((st.clientWidth - pad * 2) / S.w, (st.clientHeight - pad * 2) / S.h), sc = fit * zoom;
   const cw = Math.max(1, Math.floor(S.w * sc)), ch = Math.max(1, Math.floor(S.h * sc));
@@ -960,7 +962,31 @@ function ensureState() {
   if (['mosaic', 'center', 'zig'].includes(S.style)) cells();
 }
 
+// Copies of the same picture (copied, or the same file added again) keep the same zoom and position:
+// whichever copy was changed since last time passes its zoom on to the others, and a new copy takes the others'.
+let lastCrop = {};
+function syncTwins() {
+  if (!S.linkSame) { lastCrop = {}; return; }
+  const groups = new Map(), now = {};
+  for (const id of S.order) {
+    const m = imgs.get(id);
+    if (!m) continue;
+    if (!groups.has(m.key)) groups.set(m.key, []);
+    groups.get(m.key).push(id);
+  }
+  for (const ids of groups.values()) {
+    if (ids.length > 1) {
+      const known = ids.filter(id => id in lastCrop);
+      const lead = known.find(id => JSON.stringify(S.crop[id]) !== lastCrop[id]) || (known.length < ids.length ? known[0] : null);
+      if (lead) for (const id of ids) if (id !== lead) { if (S.crop[lead]) S.crop[id] = { ...S.crop[lead] }; else delete S.crop[id]; }
+    }
+    for (const id of ids) now[id] = JSON.stringify(S.crop[id]);
+  }
+  lastCrop = now;
+}
+
 function commit() {
+  syncTwins();
   ensureState();
   autosave();
   const j = JSON.stringify(S);
@@ -1117,7 +1143,7 @@ async function loadImg(id, name, blob) {
     return c;
   };
   const prev = shrink(1600);
-  imgs.set(id, { name, blob, full: im, prev, thumb: shrink(180).toDataURL('image/jpeg', 0.75), w, h, focus: findFocus(prev) });
+  imgs.set(id, { name, blob, key: name + '|' + blob.size, full: im, prev, thumb: shrink(180).toDataURL('image/jpeg', 0.75), w, h, focus: findFocus(prev) });
 }
 
 async function addFiles(files, asBackground) {
