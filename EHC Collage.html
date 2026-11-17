@@ -348,6 +348,11 @@ const TEMPLATES = {
     Object.assign(s, { preset: 'A4', w: 3508, h: 2480, dpi: 300, unit: 'cm', style: 'grid', spacing: 3, corners: 0, border: 2, borderColor: '#000000' });
     s.grid = { auto: false, rows: 4, cols: 5, fit: false, dupes: false };
     s.bg.type = 'color'; s.bg.color = '#ffffff'; s.perPage = 20; s.page = 0;
+    // A name box along the bottom of every picture: white text on a see-through black band.
+    const { x, y, pin, group, ...style } = TEXT_DEFAULTS;
+    s.texts = [];
+    s.autoTexts = [{ ...style, text: 'Namn', font: 'Verdana', size: 28, bold: false, pad: 16, bg: '#000000', bgAlpha: 45, bgFull: true, u: 0.5, v: 0.912, each: true, g: newId() }];
+    addTplTexts(s);
   }]
 };
 function migrate(st) {
@@ -790,7 +795,7 @@ function drawText(ctx, t, k) {
   const fs = t.size * U(), lines = t.text.split('\n'), lh = fs * 1.2;
   ctx.save();
   ctx.translate(t.x * S.w, t.y * S.h); ctx.rotate(effRot(t) * Math.PI / 180);
-  ctx.font = `${t.italic ? 'italic ' : ''}${t.bold ? 'bold ' : ''}${fs}px "${t.font}"`;
+  ctx.font = `${t.italic ? 'italic ' : ''}${t.bold ? 'bold ' : ''}${fs}px "${t.font}", "Segoe UI", Roboto, sans-serif`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round';
   // Measure the letters themselves, including the outline, so the box sits evenly around them.
   const mm = lines.map(l => ctx.measureText(l)), adv = mm.map(m => Math.max(1, m.width)), tw = Math.max(...adv);
