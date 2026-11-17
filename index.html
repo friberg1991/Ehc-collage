@@ -125,6 +125,7 @@ details ul{padding-left:18px;margin:4px 0}
     <div class="row"><button data-act="pickMode" id="bPickMode">Välj flera bilder</button><button data-act="clearPicked" id="bClearPicked">Avmarkera alla</button></div>
     <button class="wide" data-act="removePicked" id="bRemovePicked">− Ta bort valda bilder</button>
     <div data-show="grid mosaic center zig hive">
+      <label class="chk"><input type="checkbox" data-k="portrait"> Zooma in på hundarna automatiskt, som ett porträtt</label>
       <label class="chk"><input type="checkbox" data-k="linkSame"> Kopior av samma bild zoomas och flyttas likadant</label>
       <h4>Zooma flera bilder</h4>
       <div class="row"><button data-act="zoomAllOut">− Zooma ut</button><button data-act="zoomAllIn">+ Zooma in</button><button data-act="zoomAllReset">Återställ</button></div>
@@ -268,7 +269,7 @@ details ul{padding-left:18px;margin:4px 0}
     <button data-act="zoomIn">Zooma in</button><button data-act="zoomOut">Zooma ut</button><button data-act="resetCrop">Återställ</button>
     <span data-show="mosaic center"><button data-act="splitV">Dela på bredden</button><button data-act="splitH">Dela på höjden</button></span>
     <button data-act="makeHero" data-show="center">Gör till mittbild</button>
-    <button data-act="dupPic">Kopiera bilden</button>
+    <button data-act="dupPic">Kopiera bilden…</button>
     <button class="danger" data-act="removeSel">Ta bort</button>
   </span>
   <span data-when="pile">
@@ -278,7 +279,7 @@ details ul{padding-left:18px;margin:4px 0}
     <button data-act="up">Flytta upp</button><button data-act="down">Flytta ner</button>
     <button data-act="crop" id="bCrop">Beskär</button><button data-act="resetPileCrop" id="bUncrop">Ångra beskärningen</button>
     <select id="shapeSel" data-show="apile" title="Form"></select>
-    <button data-act="dupPic">Kopiera bilden</button>
+    <button data-act="dupPic">Kopiera bilden…</button>
     <button class="danger" data-act="removeSel">Ta bort</button>
   </span>
   <span data-show="pile apile">
@@ -347,7 +348,7 @@ function defaultState() {
     bg: { type: 'color', color: '#ffffff', img: null, tile: false, tiles: 5 },
     spacing: 12, corners: 0, border: 0, borderColor: '#ffffff', frame: 'instant',
     grid: { auto: true, rows: 2, cols: 3, fit: false, dupes: false },
-    symmetric: false, smartCrop: true, linkCopies: false, linkSame: true, autoTexts: [],
+    symmetric: false, smartCrop: true, portrait: true, linkCopies: false, linkSame: true, autoTexts: [],
     seed: 1, perPage: 0, page: 0, order: [], crop: {}, pile: {}, cells: {}, texts: [],
     lockPics: false, lockText: false, exportFmt: 'jpeg', exportQ: 92, allPages: true
   };
@@ -686,8 +687,20 @@ function placeTexts() {
 
 /* ---------- drawing ---------- */
 
+// Portrait: the box is filled with the top of the dog (head and chest), found by the dog finder below.
+function portraitCrop(m, rw, rh, b) {
+  const A = rw / rh, bx = b.x * m.w, by = b.y * m.h, bw = b.w * m.w, bh = b.h * m.h;
+  let w = bw * 1.05, h = w / A;
+  if (h > bh * 1.1) { h = bh * 1.1; w = h * A; }
+  const cx = bx + bw / 2, cy = by - h * 0.06 + h / 2;
+  const base = Math.max(rw / m.w, rh / m.h), z = clamp(rw / w / base, 1, 8), sc = base * z;
+  const off = (r, d, u) => Math.abs(r - d) < 0.5 ? 0 : clamp(1 - (r - 2 * u * sc) / (r - d), -1, 1);
+  return { z, x: off(rw, m.w * sc, cx), y: off(rh, m.h * sc, cy) };
+}
 function effCrop(m, rw, rh, crop) {
   if (crop) return crop;
+  const b = S.portrait && subjects.get(m.key);
+  if (b) return portraitCrop(m, rw, rh, b);
   const c = { z: 1, x: 0, y: 0 };
   if (S.smartCrop && m.focus) {
     const s = Math.max(rw / m.w, rh / m.h), ox = m.w * s - rw, oy = m.h * s - rh;
@@ -1011,7 +1024,7 @@ function dlg(msg, text, only) {
   return new Promise(res => {
     const m = $('#dlg'), inp = $('#dlgIn'), yes = $('#dlgYes'), no = $('#dlgNo'), typed = text != null;
     $('#dlgMsg').textContent = msg;
-    inp.hidden = !typed; inp.value = typed ? text : '';
+    inp.hidden = !typed; inp.value = typed ? text : ''; inp.inputMode = typed && /^\d+$/.test(text) ? 'numeric' : 'text';
     no.hidden = !!only; yes.textContent = only ? 'OK' : typed ? 'Spara' : 'Ja';
     m.hidden = false; (typed ? inp : yes).focus(); if (typed) inp.select();
     const done = v => { m.hidden = true; yes.onclick = no.onclick = inp.onkeydown = null; res(v); };
@@ -1097,7 +1110,7 @@ function syncUI() {
     $('#textList').innerHTML = S.texts.map(x => t && t.id === x.id
       ? `<div data-id="${x.id}" class="on"><input class="tin" type="text" data-t="text" data-id="${x.id}" value="${esc(x.text)}" aria-label="Texten"></div>`
       : `<div data-id="${x.id}">${esc(x.text.split('\n')[0] || '(tom)')}</div>`).join('');
-  $('#status').textContent = `${S.order.length} ${S.order.length === 1 ? 'bild' : 'bilder'}`;
+  $('#status').textContent = `${S.order.length} ${S.order.length === 1 ? 'bild' : 'bilder'}` + (finding ? ' · letar efter hundarna…' : '');
 }
 
 function select(s) {
@@ -1138,6 +1151,34 @@ function findFocus(c) {
   return { x: (sx / cnt + 0.5) / n, y: Math.max(0, (sy / cnt + 0.5) / n - 0.06) };
 }
 
+// ---------- dog finder: a ready-made picture recogniser that runs in the browser ----------
+// It is fetched the first time it is needed; without internet the pictures are simply not zoomed.
+const subjects = new Map();   // picture key -> the dog's box (parts of the picture's width and height)
+let finder = null, finding = 0, findQueue = Promise.resolve();
+const loadScript = src => new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = rej; document.head.append(el); });
+function getFinder() {
+  finder = finder || (async () => {
+    await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
+    return cocoSsd.load();
+  })().catch(() => null);
+  return finder;
+}
+function findDog(m) {
+  if (!m || subjects.has(m.key)) return;
+  subjects.set(m.key, null); finding++; syncUI();
+  findQueue = findQueue.then(async () => {
+    try {
+      const f = await getFinder();
+      if (f) {
+        const best = (await f.detect(m.prev)).filter(d => d.class === 'dog' || d.class === 'cat').sort((a, b) => b.score - a.score)[0];
+        if (best) { const [x, y, w, h] = best.bbox; subjects.set(m.key, { x: x / m.prev.width, y: y / m.prev.height, w: w / m.prev.width, h: h / m.prev.height }); }
+      }
+    } catch { }
+    finding--; syncUI(); draw();
+  });
+}
+
 async function loadImg(id, name, blob) {
   const im = new Image();
   im.src = URL.createObjectURL(blob);
@@ -1151,6 +1192,7 @@ async function loadImg(id, name, blob) {
   };
   const prev = shrink(1600);
   imgs.set(id, { name, blob, key: name + '|' + blob.size, full: im, prev, thumb: shrink(180).toDataURL('image/jpeg', 0.75), w, h, focus: findFocus(prev) });
+  if (S.portrait) findDog(imgs.get(id));
 }
 
 async function addFiles(files, asBackground) {
@@ -1556,11 +1598,14 @@ const A = {
   resetCrop() { const id = selId(); if (picSel.size > 1 && picSel.has(id)) return zoomMany(0); if (id) { delete S.crop[id]; commit(); } },
   pickMode() { pickMany = !pickMany; syncUI(); },
   clearPicked() { picSel.clear(); pickMany = false; syncUI(); draw(); },
-  dupPic() {
+  async dupPic() {
     const ids = picSel.size > 1 ? [...picSel] : [selId()].filter(Boolean);
     if (!ids.length) return toast('Markera en bild först');
+    const ans = await askText(ids.length > 1 ? 'Hur många likadana ska det bli av varje vald bild? Originalet räknas med.' : 'Hur många likadana ska det bli av bilden? Originalet räknas med.', '4');
+    const total = Math.min(50, parseInt(ans, 10) || 0);
+    if (total < 2) return;
     const fresh = [];
-    for (const id of ids) {
+    for (const id of ids) for (let k = 1; k < total; k++) {
       const m = imgs.get(id);
       if (!m) continue;
       const nid = newId();
@@ -1573,7 +1618,7 @@ const A = {
       fresh.push(nid);
     }
     addTplTexts(S, fresh); S.cells = {}; commit();
-    toast(fresh.length === 1 ? 'Bilden är kopierad' : `${fresh.length} bilder är kopierade`);
+    toast(fresh.length === 1 ? 'Bilden är kopierad' : `${fresh.length} kopior är tillagda`);
   },
   zoomAllIn: () => zoomMany(1.15), zoomAllOut: () => zoomMany(1 / 1.15), zoomAllReset: () => zoomMany(0),
   splitV: () => splitCell(true), splitH: () => splitCell(false),
@@ -1676,6 +1721,7 @@ function onKey(k) {
   if (k === 'lockPics' && S.lockPics && sel && sel.type !== 'text') { sel = null; cropId = null; }
   if (k === 'lockText' && S.lockText && sel && sel.type === 'text') sel = null;
   if (k === 'style') { sel = null; cropId = null; }
+  if (k === 'portrait' && S.portrait) imgs.forEach(findDog);
 }
 
 function fieldValue(el) {
