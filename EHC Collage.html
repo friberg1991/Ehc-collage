@@ -69,6 +69,24 @@ canvas{box-shadow:0 4px 26px rgba(0,0,0,.6);background:repeating-conic-gradient(
 body.busy,body.busy *{cursor:progress!important}
 details summary{cursor:pointer}
 details ul{padding-left:18px;margin:4px 0}
+@media (hover:none){.pic button{opacity:1}}
+/* Phone: the collage on top, the settings as a panel below it that opens and closes from its tabs */
+@media (max-width:760px){
+  .top,.bar{flex-wrap:nowrap;overflow-x:auto;padding:6px 8px;gap:6px;scrollbar-width:none}
+  .top::-webkit-scrollbar,.bar::-webkit-scrollbar{display:none}
+  .top>*,.bar>*{flex-shrink:0}
+  .bar>span{flex-wrap:nowrap}
+  .brand,.top .grow,.bar .grow{display:none}
+  button{padding:8px 12px}
+  .main{flex-direction:column-reverse}
+  .side{width:100%;border-right:0;border-top:1px solid var(--line);flex:0 0 auto}
+  .side section{max-height:42vh;flex:0 1 auto}
+  .side.closed section{display:none}
+  .tabs button{padding:10px 0}
+  .side .pics{grid-template-columns:repeat(5,1fr)}
+  .stage{flex:1 1 0;min-height:0}
+  .stagewrap{padding:10px}
+}
 </style>
 </head>
 <body>
@@ -867,7 +885,7 @@ function setZoom(z, clientX, clientY) {
 
 function paint() {
   raf = 0;
-  const st = $('#stage'), pad = 28;
+  const st = $('#stage'), pad = isPhone() ? 10 : 28;
   const fit = Math.min((st.clientWidth - pad * 2) / S.w, (st.clientHeight - pad * 2) / S.h), sc = fit * zoom;
   const cw = Math.max(1, Math.floor(S.w * sc)), ch = Math.max(1, Math.floor(S.h * sc));
   // keep the drawing buffer within reason when zoomed far in
@@ -931,6 +949,18 @@ function restore(j) { S = JSON.parse(j); sel = null; cropId = null; syncUI(); dr
 let wheelTimer = 0, toastTimer = 0;
 const commitSoon = () => { draw(); clearTimeout(wheelTimer); wheelTimer = setTimeout(commit, 400); };
 function toast(msg) { $('#status').textContent = msg; clearTimeout(toastTimer); toastTimer = setTimeout(syncUI, 2500); }
+
+const isPhone = () => matchMedia('(max-width:760px)').matches;
+// On a phone the settings panel sits under the collage: tapping the open tab folds it away, any tab opens it.
+function tapTab(name) {
+  const side = $('.side'), on = $(`[data-tab="${name}"]`).classList.contains('on');
+  if (isPhone()) side.classList.toggle('closed', on && !side.classList.contains('closed'));
+  showTab(name);
+}
+function editTextNow() {
+  showTab('text'); $('.side').classList.remove('closed');
+  const ta = $('#textArea'); ta.focus(); ta.select();
+}
 
 function showTab(name) {
   $$('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
@@ -1552,7 +1582,7 @@ document.addEventListener('click', e => {
     else { const t = selText(); if (t) for (const x of linked(t)) x[seg.dataset.t] = b.value; }
     return commit();
   }
-  if (b.dataset.tab) return showTab(b.dataset.tab);
+  if (b.dataset.tab) return tapTab(b.dataset.tab);
   if (b.dataset.act && A[b.dataset.act]) A[b.dataset.act]();
 });
 
@@ -1870,8 +1900,49 @@ cv.addEventListener('pointerup', endDrag);
 cv.addEventListener('pointercancel', endDrag);
 
 cv.addEventListener('dblclick', e => {
-  if (hitText(pt(e))) { showTab('text'); const ta = $('#textArea'); ta.focus(); ta.select(); }
+  if (hitText(pt(e))) editTextNow();
 });
+
+// ---------- touch: two fingers zoom and move the view, press and hold on a text to write in it ----------
+const touches = new Map();
+let pinch = null, holdTimer = 0;
+cv.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  clearTimeout(holdTimer);
+  if (touches.size === 1 && hitText(pt(e))) {
+    const x0 = e.clientX, y0 = e.clientY;
+    holdTimer = setTimeout(() => {
+      const t = touches.get(e.pointerId);
+      if (t && Math.hypot(t.x - x0, t.y - y0) < 10) { endDrag(); editTextNow(); }
+    }, 550);
+  }
+  if (touches.size >= 2) e.stopImmediatePropagation();
+  if (touches.size === 2) {
+    if (drag && drag.mode === 'cell') drag.target = null;
+    if (drag) endDrag();
+    const [a, b] = [...touches.values()], st = $('#stage');
+    pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, z0: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, sx: st.scrollLeft, sy: st.scrollTop };
+  }
+}, true);
+cv.addEventListener('pointermove', e => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!pinch || touches.size !== 2) return;
+  e.stopImmediatePropagation();
+  const [a, b] = [...touches.values()], st = $('#stage');
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  setZoom(pinch.z0 * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0, mx, my);
+  st.scrollLeft -= mx - pinch.mx; st.scrollTop -= my - pinch.my;
+  pinch.mx = mx; pinch.my = my;
+}, true);
+const touchUp = e => {
+  touches.delete(e.pointerId); clearTimeout(holdTimer);
+  if (touches.size < 2) pinch = null;
+  if (pinch === null && touches.size === 1) drag = null;
+};
+cv.addEventListener('pointerup', touchUp, true);
+cv.addEventListener('pointercancel', touchUp, true);
 
 cv.addEventListener('wheel', e => {
   e.preventDefault();
