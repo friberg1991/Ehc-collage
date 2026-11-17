@@ -69,6 +69,10 @@ canvas{box-shadow:0 4px 26px rgba(0,0,0,.6);background:repeating-conic-gradient(
 body.busy,body.busy *{cursor:progress!important}
 details summary{cursor:pointer}
 details ul{padding-left:18px;margin:4px 0}
+.dlg{width:min(400px,90vw)}
+.dlg p{white-space:pre-line;margin:2px 0 12px;user-select:text}
+.dlg input{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--field);color:var(--text);margin-bottom:10px}
+.dlg .row{justify-content:flex-end}
 @media (hover:none){.pic button{opacity:1}}
 /* Phone: the collage on top, the settings as a panel below it that opens and closes from its tabs */
 @media (max-width:760px){
@@ -286,6 +290,14 @@ details ul{padding-left:18px;margin:4px 0}
     <h4>Välj en bild till den här rutan</h4>
     <div id="pickList" class="pics"></div>
     <button data-act="closePicker">Avbryt</button>
+  </div>
+</div>
+
+<div class="modal" id="dlg" hidden>
+  <div class="box dlg">
+    <p id="dlgMsg"></p>
+    <input type="text" id="dlgIn" hidden>
+    <div class="row"><button id="dlgNo">Avbryt</button><button class="primary" id="dlgYes">Ja</button></div>
   </div>
 </div>
 
@@ -950,6 +962,24 @@ let wheelTimer = 0, toastTimer = 0;
 const commitSoon = () => { draw(); clearTimeout(wheelTimer); wheelTimer = setTimeout(commit, 400); };
 function toast(msg) { $('#status').textContent = msg; clearTimeout(toastTimer); toastTimer = setTimeout(syncUI, 2500); }
 
+// Questions and messages are shown in the page itself: a claude.ai page cannot show the browser's own boxes.
+function dlg(msg, text, only) {
+  return new Promise(res => {
+    const m = $('#dlg'), inp = $('#dlgIn'), yes = $('#dlgYes'), no = $('#dlgNo'), typed = text != null;
+    $('#dlgMsg').textContent = msg;
+    inp.hidden = !typed; inp.value = typed ? text : '';
+    no.hidden = !!only; yes.textContent = only ? 'OK' : typed ? 'Spara' : 'Ja';
+    m.hidden = false; (typed ? inp : yes).focus(); if (typed) inp.select();
+    const done = v => { m.hidden = true; yes.onclick = no.onclick = inp.onkeydown = null; res(v); };
+    yes.onclick = () => done(typed ? (inp.value.trim() || null) : true);
+    no.onclick = () => done(typed ? null : false);
+    inp.onkeydown = e => { if (e.key === 'Enter') yes.click(); else if (e.key === 'Escape') no.click(); };
+  });
+}
+const ask = msg => dlg(msg);
+const askText = (msg, def) => dlg(msg, def);
+const say = msg => { dlg(msg, null, true); };
+
 const isPhone = () => matchMedia('(max-width:760px)').matches;
 // On a phone the settings panel sits under the collage: tapping the open tab folds it away, any tab opens it.
 function tapTab(name) {
@@ -1083,11 +1113,25 @@ async function addFiles(files, asBackground) {
   }
   addTplTexts(S, fresh);
   busy(false);
-  if (bad.length) alert('De här filerna gick inte att öppna:\n' + bad.join('\n'));
+  if (bad.length) say('De här filerna gick inte att öppna:\n' + bad.join('\n'));
   commit();
 }
 
+// When the page runs as a claude.ai page (on the phone), files are saved through claude.ai.
+// Gives true (saved), false (the person said no) or null (not on claude.ai: save the normal way).
+let claudeDl;
+async function claudeSave(blob, name) {
+  if (!window.claude || !window.claude.use) return null;
+  claudeDl = claudeDl || window.claude.use('downloads');
+  const d = await claudeDl;
+  if (!d) return null;
+  try { await d.save({ filename: name.replace(/\.collage$/, '.json'), data: blob }); return true; }
+  catch (e) { if (e.code !== 'declined') say('Det gick inte att spara filen här.'); return false; }
+}
+
 async function saveBlob(blob, name, desc, ext) {
+  const viaClaude = await claudeSave(blob, name);
+  if (viaClaude !== null) return viaClaude;
   if (window.showSaveFilePicker) {
     try {
       const h = await showSaveFilePicker({ suggestedName: name, types: [{ description: desc, accept: { [blob.type]: [ext] } }] });
@@ -1112,7 +1156,7 @@ async function saveProject() {
 }
 
 async function openProject(file) {
-  if (dirty && !confirm('Vill du öppna ett annat collage? Ändringar som du inte har sparat försvinner.')) return;
+  if (dirty && !(await ask('Vill du öppna ett annat collage? Ändringar som du inte har sparat försvinner.'))) return;
   busy(true);
   try {
     const d = JSON.parse(await file.text());
@@ -1121,7 +1165,7 @@ async function openProject(file) {
     for (const im of d.images) await loadImg(im.id, im.name, dataToBlob(im.src));
     S = migrate(d.state);
     resetHistory();
-  } catch { alert('Filen gick inte att öppna som ett collage.'); }
+  } catch { say('Filen gick inte att öppna som ett collage.'); }
   busy(false); syncUI();
 }
 
@@ -1193,7 +1237,7 @@ async function pageJpegs() {
 }
 
 async function exportImage() {
-  if (!S.order.length && !S.texts.length) return alert('Lägg till några bilder först.');
+  if (!S.order.length && !S.texts.length) return say('Lägg till några bilder först.');
   const fmt = S.exportFmt, pages = pageCount(), all = S.allPages && pages > 1;
   if (fmt === 'pdf') {
     busy(true); await nextFrame();
@@ -1220,14 +1264,14 @@ async function exportImage() {
     S.page = i;
     const blob = await one(), name = `collage-sida-${i + 1}.${ext}`;
     if (dir) { const fh = await dir.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(blob); await w.close(); }
-    else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); }
+    else if (await claudeSave(blob, name) === null) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); }
   }
   S.page = keep; draw();
   toast(`${pages} sidor sparade`);
 }
 
 async function printCollage() {
-  if (!S.order.length && !S.texts.length) return alert('Lägg till några bilder först.');
+  if (!S.order.length && !S.texts.length) return say('Lägg till några bilder först.');
   const keep = S.page, urls = [];
   const pages = S.allPages ? pageCount() : 1;
   for (let i = 0; i < pages; i++) {
@@ -1346,8 +1390,8 @@ function pasteAll() {
 }
 
 const A = {
-  newDoc() {
-    if (dirty && !confirm('Vill du börja på ett nytt collage? Ändringar som du inte har sparat försvinner.')) return;
+  async newDoc() {
+    if (dirty && !(await ask('Vill du börja på ett nytt collage? Ändringar som du inte har sparat försvinner.'))) return;
     imgs.clear(); S = defaultState(); TEMPLATES.ehc[1](S); resetHistory(); clearAutosave(); $('#templateSel').value = 'ehc'; syncUI();
   },
   open: () => $('#fProj').click(),
@@ -1356,12 +1400,12 @@ const A = {
   redo() { if (hi < hist.length - 1) restore(hist[++hi]); },
   addPics: () => $('#fPics').click(),
   pickBg: () => $('#fBg').click(),
-  clearPics() { if (S.order.length && confirm('Vill du ta bort alla bilder?')) removePics(S.order.slice()); },
+  async clearPics() { if (S.order.length && await ask('Vill du ta bort alla bilder?')) removePics(S.order.slice()); },
   removePicked() { if (picSel.size) removePics([...picSel]); },
   landscape() { if (S.h > S.w) { [S.w, S.h] = [S.h, S.w]; commit(); } },
   portrait() { if (S.w > S.h) { [S.w, S.h] = [S.h, S.w]; commit(); } },
-  saveSize() {
-    const name = prompt('Vad ska storleken heta?', `${toUnit(S.w)} × ${toUnit(S.h)} cm`);
+  async saveSize() {
+    const name = await askText('Vad ska storleken heta?', `${toUnit(S.w)} × ${toUnit(S.h)} cm`);
     if (!name) return;
     userSizes.push({ name, w: S.w, h: S.h, dpi: DPI, unit: 'cm' }); storeSizes(); fillPresetSelect();
     S.preset = 'u' + (userSizes.length - 1); commit();
@@ -1382,18 +1426,18 @@ const A = {
     sel = null; S.cells = {}; commit();
   },
   saveStart() {
-    try { localStorage.setItem('qc.start', JSON.stringify(tplSnapshot())); } catch { return alert('Det gick inte att spara startmallen.'); }
+    try { localStorage.setItem('qc.start', JSON.stringify(tplSnapshot())); } catch { return say('Det gick inte att spara startmallen.'); }
     $('#templateSel').value = 'ehc'; syncUI();
     toast('Sparad. EHC MATLAPPAR ser ut så här från och med nu.');
   },
-  resetStart() {
-    if (!loadStart() || !confirm('Vill du återställa EHC MATLAPPAR till hur den såg ut från början?')) return;
+  async resetStart() {
+    if (!loadStart() || !(await ask('Vill du återställa EHC MATLAPPAR till hur den såg ut från början?'))) return;
     try { localStorage.removeItem('qc.start'); } catch { }
     TEMPLATES.ehc[1](S); S.cells = {}; sel = null; commit();
     toast('EHC MATLAPPAR är återställd');
   },
-  saveTemplate() {
-    const name = prompt('Vad ska mallen heta?', 'Min mall');
+  async saveTemplate() {
+    const name = await askText('Vad ska mallen heta?', 'Min mall');
     if (!name) return;
     userTpl.push({ name, s: tplSnapshot() }); storeTpl(); fillTemplateSelect();
     $('#templateSel').value = 'u' + (userTpl.length - 1); syncUI(); toast(`Mallen ”${name}” är sparad`);
@@ -1521,9 +1565,9 @@ const A = {
   },
   copyText, pasteText, pasteAll,
   fitBox() { const t = selText(); if (t) { for (const o of linked(t)) { o.bw = 0; o.bh = 0; } commit(); } },
-  delCopies() {
+  async delCopies() {
     const t = selText();
-    if (t && t.group && confirm('Vill du ta bort den här texten från alla bilder?')) { S.texts = S.texts.filter(x => x.group !== t.group); sel = null; commit(); }
+    if (t && t.group && await ask('Vill du ta bort den här texten från alla bilder?')) { S.texts = S.texts.filter(x => x.group !== t.group); sel = null; commit(); }
   }
 };
 
@@ -1617,12 +1661,12 @@ $('#textArea').addEventListener('keydown', e => {
   select({ type: 'text', id: next.id });
   $('#textArea').value = next.text; $('#textArea').focus(); $('#textArea').select();
 });
-$('#templateSel').addEventListener('change', e => {
+$('#templateSel').addEventListener('change', async e => {
   const v = e.target.value;
   if (!v) return syncUI();
   const name = v[0] === 'u' ? (userTpl[+v.slice(1)] || {}).name : (TEMPLATES[v] || [])[0];
   const tplTexts = v[0] === 'u' ? (userTpl[+v.slice(1)].s.texts || []).length : (loadStart() || {}).texts ? loadStart().texts.length : 0;
-  const keepTexts = S.texts.length && tplTexts && !confirm('Mallen har egna texter. Vill du byta ut texterna som redan finns i collaget?');
+  const keepTexts = S.texts.length && tplTexts && !(await ask('Mallen har egna texter. Vill du byta ut texterna som redan finns i collaget?'));
   if (v[0] === 'u') applyTpl(userTpl[+v.slice(1)].s, S, !keepTexts);
   else if (loadStart()) applyTpl(loadStart(), S, !keepTexts);
   else TEMPLATES[v][1](S);
@@ -1667,6 +1711,8 @@ addEventListener('paste', e => {
 });
 addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });
 new ResizeObserver(draw).observe($('#stage'));
+// A claude.ai page cannot print, so the button is hidden there.
+setTimeout(() => { if (window.claude) $('[data-act="print"]').hidden = true; });
 
 addEventListener('keyup', e => { if (e.code === 'Space') { spaceDown = false; $('#stage').classList.remove('pan'); } });
 addEventListener('blur', () => { spaceDown = false; $('#stage').classList.remove('pan'); });
@@ -2028,7 +2074,7 @@ async function offerRestore() {
       S = migrate(st);
       S.order = S.order.filter(id => imgs.has(id));
       resetHistory();
-    } catch { alert('Det gick inte att hämta tillbaka collaget.'); }
+    } catch { say('Det gick inte att hämta tillbaka collaget.'); }
     busy(false); syncUI();
   };
 }
